@@ -83,68 +83,80 @@ class GradElements(BaseElements,  gradFluidElements):
         # Kernel to post-process
         self.post = Kernel(self._make_post(), upts_in)
  #-------------------------------------------------------------------------------#
-    def compute_L2_norm(self):
-        nvars, nface, ndims = self.nvars, self.nface, self.ndims
-        vol                 = self._vol
-        # **************************#
+def compute_L2_norm(self):
+    nvars, nface, ndims = self.nvars, self.nface, self.ndims
+    vol = self._vol
+    resid = 0.0  # Initialize residual
 
-        #Complete
+    # **************************#
+    # Loop over elements and variables to compute the L2 norm
+    for i in range(self.neles):  # Loop over elements
+        for j in range(nvars):  # Loop over variables
+            # Calculate the difference between computed and exact solutions
+            diff = self.upts[j, i] - self.exact[j, i]  # Assume `self.exact` is provided
+            # Accumulate the volume-weighted squared difference
+            resid += vol[i] * diff**2
 
-        # **************************#
+    # Normalize the residual by the number of elements and take the square root
+    resid = np.sqrt(resid / self.neles)
+    # **************************#
 
-        return resid
+    return resid
 
 #-------------------------------------------------------------------------------#
     # Assign cell centers values to face centers
-    def _make_compute_fpts(self):
-        nvars, nface = self.nvars, self.nface
+   def _make_compute_fpts(self):
+    nvars, nface = self.nvars, self.nface
 
-        def _compute_fpts(i_begin, i_end, upts, fpts):
-            # Copy upts to fpts
-            for idx in range(i_begin, i_end):
-                for j in range(nvars):
-                    # **************************#
+    def _compute_fpts(i_begin, i_end, upts, fpts):
+        # Copy upts (cell center values) to fpts (face values)
+        for idx in range(i_begin, i_end):
+            for j in range(nvars):
+                for k in range(nface):
+                    fpts[k, j, idx] = upts[j, idx]  # Assign center value to all faces
 
-                    #Complete
-
-                    # **************************#
-        
-        return self.be.make_loop(self.neles, _compute_fpts)   
+    return self.be.make_loop(self.neles, _compute_fpts)
+  
 #-------------------------------------------------------------------------------#
-    def _make_grad_ls(self):
-        nface, ndims, nvars = self.nface, self.ndims, self.nvars
-        # Gradient operator 
-        op = self._grad_operator
+def _make_grad_ls(self):
+    nface, ndims, nvars = self.nface, self.ndims, self.nvars
+    # Gradient operator
+    op = self._grad_operator
 
-        def _cal_grad(i_begin, i_end, fpts, grad):
-            # Elementwiseloop
-            for i in range(i_begin, i_end):
-                # **************************#
+    def _cal_grad(i_begin, i_end, fpts, grad):
+        for i in range(i_begin, i_end):  # Loop over elements
+            for l in range(nvars):  # Loop over variables
+                for j in range(ndims):  # Loop over dimensions
+                    grad[j, l, i] = 0  # Initialize gradient
+                    for k in range(nface):  # Loop over faces
+                        grad[j, l, i] += op[j, k, i] * fpts[k, l, i]
 
-                #Complete
-
-                # **************************#
-
-        # Compile the function
-        return self.be.make_loop(self.neles, _cal_grad)    
+    # Compile the function
+    return self.be.make_loop(self.neles, _cal_grad)
+  
 #-------------------------------------------------------------------------------#
     def _make_grad_gg(self):
-        nface, ndims, nvars = self.nface, self.ndims, self.nvars
-        Normal vector and volume
-        snorm_mag = self._mag_snorm_fpts
-        snorm_vec = np.rollaxis(self._vec_snorm_fpts, 2)
-        vol       = self._vol
+    nface, ndims, nvars = self.nface, self.ndims, self.nvars
+    # Normal vector and volume
+    snorm_mag = self._mag_snorm_fpts  # Magnitude of surface normals
+    snorm_vec = np.rollaxis(self._vec_snorm_fpts, 2)  # Surface normal vectors (dim, nface, neles)
+    vol = self._vol  # Element volume
 
-        def _cal_grad(i_begin, i_end, fpts, grad):
-            # Elementwise loop starts here
-            for i in range(i_begin, i_end):
-               
-                # **************************#
-                #Complete
-                # **************************#
+    def _cal_grad(i_begin, i_end, fpts, grad):
+        # Elementwise loop starts here
+        for i in range(i_begin, i_end):
+            for l in range(nvars):  # Loop over variables
+                for j in range(ndims):  # Loop over dimensions
+                    tmp = 0
+                    for k in range(nface):  # Loop over faces
+                        # Compute the contribution for the current face
+                        tmp += snorm_vec[j, k, i] * fpts[k, l, i] * snorm_mag[k, i]
+                    # Final gradient computation (divide by volume)
+                    grad[j, l, i] = tmp / vol[i]
 
-        # Compile the function
-        return self.be.make_loop(self.neles, _cal_grad)      
+    # Compile the function
+    return self.be.make_loop(self.neles, _cal_grad)
+ 
 
 #-------------------------------------------------------------------------------#
     def _make_recon(self):
@@ -173,18 +185,22 @@ class GradElements(BaseElements,  gradFluidElements):
     @property
     # @fc.lru_cache()
     # @chop
-    def _grad_operator(self):
-        # Difference of displacement vector (cell to cell)
-        # (Nfaces, Nelements, dim) -> (dim, Nfaces, Nelements)
-        dxc = np.rollaxis(self.dxc, 2)
-        # (Nfaces, Nelements)
-        distance = np.linalg.norm(dxc, axis=0)
+    @property
+def _grad_operator(self):
+    # Difference of displacement vector (cell to cell)
+    # (Nfaces, Nelements, dim) -> (dim, Nfaces, Nelements)
+    dxc = np.rollaxis(self.dxc, 2)
+    # (Nfaces, Nelements)
+    distance = np.linalg.norm(dxc, axis=0)
 
+    # Normalize displacement vectors to get the operator
+    op = dxc / distance[None, :, :]  # Add a new axis for broadcasting
 
-        # **************************#
-        #Complete
-        # **************************#
-        return op
+    # Handle any division by zero (though rare in proper meshes)
+    op[np.isnan(op)] = 0.0
+
+    return op
+
 
     def _make_post(self):
         nface, ndims, nvars = self.nface, self.ndims, self.nvars
